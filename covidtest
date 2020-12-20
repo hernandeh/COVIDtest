@@ -1,0 +1,148 @@
+import pandas as pd
+import numpy as np
+##EXTRACT DATA FROM JOHNS HOPKINS GITHUB
+#cases and deaths
+url_world_cases = 'https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv'
+url_world_deaths = 'https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv'
+url_us_cases = 'https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv'
+url_us_deaths = 'https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_US.csv'
+cases_w = pd.read_csv(url_world_cases, index_col=0)
+deaths_w = pd.read_csv(url_world_deaths, index_col=0)
+cases_us = pd.read_csv(url_us_cases, index_col=0)
+deaths_us = pd.read_csv(url_us_deaths, index_col=0)
+#population
+url_pop='https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv'
+population=pd.read_csv(url_pop, index_col=0).dropna(subset=['Population'])
+population=population[population['Admin2'].isnull()]
+
+##CREATE DATAFRAMES WITH DATA (CUMULATIVE CASES AND CUMULATIVE DEATHS)
+cum_w=cases_w.groupby('Country/Region').sum().drop(['Lat','Long'],axis=1)
+cum_us=cases_us.groupby('Province_State').sum().drop(['code3','FIPS','Lat','Long_'],axis=1)
+cum_us.index=cum_us.index+', USA'
+cum=cum_w.append(cum_us)
+cumd_w=deaths_w.groupby('Country/Region').sum().drop(['Lat','Long'],axis=1)
+cumd_us=deaths_us.groupby('Province_State').sum().drop(['code3','FIPS','Lat','Long_','Population'],axis=1)
+cumd_us.index=cumd_us.index+', USA'
+cumd=cumd_w.append(cumd_us)
+
+#CREATE DATAFRAMES WITH DATA (INDIVIDUAL CASES AND INDIVIDUAL DEATHS)
+cases=cum.diff(periods=1, axis=1)
+deaths=cumd.diff(periods=1, axis=1)
+
+#CREATE DATAFRAME WITH POPULATION DATA
+pop_us=population[population['Country_Region']=='US'].drop(['iso2','iso3','code3','FIPS','Admin2','Country_Region','Lat','Long_','Combined_Key'],axis=1)
+pop_us.fillna('USA', inplace=True)
+pop_us=pop_us.groupby('Province_State').sum()
+pop_us.index=pop_us.index+', USA'
+pop_world=population[population['Province_State'].isnull()].drop(['iso2','iso3','code3','FIPS','Admin2','Province_State','Lat','Long_','Combined_Key'],axis=1).set_index('Country_Region')
+popul=pop_world.append((pop_us))
+
+#MERGE ALL 4 DATAFRAMES (CUMULATIVE AND INDIVIDUAL CASES AND DEATHS)
+dfc=cases.merge(popul, how='inner', left_index=True, right_index=True)
+dfc_cum=cum.merge(popul, how='inner', left_index=True, right_index=True)
+dfd=deaths.merge(popul, how='inner', left_index=True, right_index=True)
+dfd_cum=cumd.merge(popul, how='inner', left_index=True, right_index=True)
+
+#CREATE 7d AVG DATAFRAMES FOR CASES AND DEATHS
+dfc7=dfc.iloc[:,0:-1].rolling(7,axis=1).mean()
+dfd7=dfd.iloc[:,0:-1].rolling(7,axis=1).mean()
+
+#CREATE NORMALIZED DATAFRAMES FOR CASES AND DEATHS (per 1M HABITANTS, 7d AVG)
+cnorm=dfc7.div(dfc.iloc[:,-1], axis=0)*1000000
+dnorm=dfd7.div(dfd.iloc[:,-1], axis=0)*1000000
+
+#CREATE CSV FILES
+dfc.to_csv('dfc.csv')
+dfc_cum.to_csv('dfc_cum.csv')
+dfd.to_csv('dfd.csv')
+dfd_cum.to_csv('dfd_cum.csv')
+dfc7.to_csv('dfc7.csv')
+dfd7.to_csv('dfd7.csv')
+cnorm.to_csv('cnorm.csv')
+dnorm.to_csv('dnorm.csv')
+
+#CREATE SUMMARY TABLE
+print(dfc.columns[-2])
+summary=pd.DataFrame(data=None)
+summary['C7d1M']=cnorm.iloc[:,-1].astype(int)
+summary['D7d1M']=round(dnorm.iloc[:,-1],1)
+summary['Max_cases']=dfc.iloc[:,0:-1].max(axis=1).astype(int)
+summary['Max_deaths']=dfd.iloc[:,0:-1].max(axis=1).astype(int)
+summary['Max_c7d1M']=round(cnorm.max(axis=1),1)
+summary['Max_d7d1M']=round(dnorm.max(axis=1),1)
+summary['Ratio_cases']=round(dfc.iloc[:,-2]/(dfc.iloc[:,0:-2].max(axis=1)),4)
+summary['Ratio_deaths']=round(dfd.iloc[:,-2]/(dfd.iloc[:,0:-2].max(axis=1)),4)
+summary['Ratio_c7d1M']=round(cnorm.iloc[:,-1]/(cnorm.iloc[:,0:-1].max(axis=1)),4)
+summary['Ratio_d7d1M']=round(dnorm.iloc[:,-1]/(dnorm.iloc[:,0:-1].max(axis=1)),4)
+summary['%infected']=round(dfc_cum.iloc[:,-2]/dfc_cum.iloc[:,-1]*100,2)
+summary['Mortality']=round(cumd.iloc[:,-1]/cum.iloc[:,-1]*1000,0).replace([np.inf,np.nan], 0).astype(int)
+summary.to_csv('summary.csv')
+#summary[summary['Ratio_d7d1M']>=1].sort_values(by='Ratio_d7d1M', ascending=False)
+#summary.sort_values(by='C7d1M',ascending=False).head(20)
+#summary.sort_values(by='C7d1M', ascending=False).head(20)
+
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import pandas as pd
+import numpy as np
+
+#Create variables
+top20c=summary.sort_values(by='C7d1M', ascending=False).head(20)
+top20d=summary.sort_values(by='D7d1M', ascending=False).head(20)
+top20i=summary.sort_values(by='%infected', ascending=False).head(20)
+cpeak=summary[summary['Ratio_c7d1M']>=1].sort_values(by='C7d1M', ascending=False)
+dpeak=summary[summary['Ratio_d7d1M']>=1].sort_values(by='D7d1M', ascending=False)
+number=np.linspace(1,20,20)
+
+
+fig1 = make_subplots(rows=1, cols=3,shared_xaxes=False,horizontal_spacing=0.03,specs=[[{"type": "table"},{"type": "table"},{"type": "table"}]])
+
+fig1.add_trace(go.Table(columnorder = [1,2,3], columnwidth = [2,10,4],
+    header=dict(values=['<b>#</b>','<b>Country/State</b>', '<b>Cases</b>'],line_color='darkslategray',fill_color='paleturquoise',align='center'),
+    cells=dict(values=[number, top20c.index, top20c[top20c.columns[0]].astype(int)],line_color='darkslategray',fill_color='lavender',align=['center','left','center'])),row=1, col=1)
+
+fig1.add_trace(go.Table(columnorder = [1,2,3], columnwidth = [2,10,4],
+    header=dict(values=['<b>#</b>','<b>Country/State</b>', '<b>Deaths</b>'],line_color='darkslategray',fill_color='paleturquoise',align='center'),
+    cells=dict(values=[number,top20d.index, top20d[top20d.columns[1]].astype(int)],line_color='darkslategray',fill_color='lavender',align=['center','left','center'])),row=1, col=2)
+
+fig1.add_trace(go.Table(columnorder = [1,2,3], columnwidth = [2,10,4],
+    header=dict(values=['<b>#</b>','<b>Country/State</b>', '<b>%(+)</b>'],line_color='darkslategray',fill_color='paleturquoise',align='center'),
+    cells=dict(values=[number,top20i.index, top20i[top20i.columns[-2]]],line_color='darkslategray',fill_color='lavender',align=['center','left','center'])),row=1, col=3)
+
+fig1.update_layout(height=650,width=1050,showlegend=False,title_text="%s - TOP-20 Cases and Deaths (7d avg per 1M population) and Percent Population Infected" %dfc.columns[-2])
+
+fig1.show()
+
+fig2 = make_subplots(rows=1, cols=2,shared_xaxes=False,horizontal_spacing=0.03,specs=[[{"type": "table"},{"type": "table"}]])
+
+case1M=round(cpeak[cpeak.columns[0]],2)
+caseper=round((cpeak[cpeak.columns[-4]]-1)*100,1)
+
+fig2.add_trace(go.Table(columnorder = [1,2,3], columnwidth = [10,5.5,7],
+    header=dict(values=['<b>Country/State</b>', '<b>Cases/1M</b>','<b>%over record</b>'],line_color='darkslategray',fill_color='paleturquoise',align='center'),
+    cells=dict(values=[cpeak.index, case1M, caseper],fill = dict(color=[['rgba(0, 255, 0, 1)' if val < 150 else 'rgba(255, 255, 0, 1)' if val >=150 and val <500 else 'rgba(255, 128, 0, 1)' for val in case1M]]),line_color='darkslategray',align=['left','center','center'])),row=1, col=1)
+
+death1M=round(dpeak[dpeak.columns[1]],2)
+deathper=round((dpeak[dpeak.columns[-3]]-1)*100,1)
+
+fig2.add_trace(go.Table(columnorder = [1,2,3], columnwidth = [10,5.5,7],
+    header=dict(values=['<b>Country/State</b>', '<b>Deaths/1M</b>','<b>%over record</b>'],line_color='darkslategray',fill_color='paleturquoise',align='center'),
+    cells=dict(values=[dpeak.index, death1M, deathper], fill = dict(color=[['rgba(0, 255, 0, 1)' if val < 2 else 'rgba(255, 255, 0, 1)' if val >=2 and val <10 else 'rgba(255, 128, 0, 1)' for val in death1M]]),line_color='darkslategray',align=['left','center','center'])),row=1, col=2)
+
+fig2.update_layout(height=900,width=950,showlegend=False,title_text=" %s - Entities peaking in Cases and Deaths, percentage increase over previous record" %dfc.columns[-2],)
+
+fig2.show()
+
+ent1='Oklahoma, USA'
+ent2='US'
+ent3='Spain'
+fig3 = go.Figure()
+fig3.add_trace(go.Scatter(x=cnorm.columns, y=cnorm.loc[ent1],
+                    mode='lines',
+                    name=ent1))
+fig3.add_trace(go.Scatter(x=cnorm.columns, y=cnorm.loc[ent2],
+                    mode='lines',
+                    name=ent2))
+fig3.add_trace(go.Scatter(x=cnorm.columns, y=cnorm.loc[ent3],
+                    mode='lines', name=ent3))
+fig3.show()
